@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Team Linell</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; background-color: #111; user-select: none; touch-action: none;}
+    
+    #instructions {
+      position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column;
+      justify-content: center; align-items: center; background-color: rgba(0,0,0,0.85);
+      color: white; z-index: 10; text-align: center;
+    }
+    button {
+      padding: 15px 30px; font-size: 1.2rem; cursor: pointer; display: block;
+      background: #4caf50; color: white; border: none; border-radius: 5px; margin-top: 30px;
+      box-shadow: 0 0 15px #4caf50; transition: 0.3s; font-weight: bold;
+    }
+    button:hover { background: #45a049; box-shadow: 0 0 25px #4caf50; }
+    
+    /* VIRTUAL JOYSTICK CSS */
+    #joystickZone {
+      position: absolute; bottom: 40px; left: 40px;
+      width: 120px; height: 120px;
+      background: rgba(255,255,255,0.05);
+      border: 2px solid rgba(255,255,255,0.2);
+      border-radius: 50%; display: none; z-index: 20;
+      touch-action: none;
+    }
+    #joystickKnob {
+      position: absolute; top: 50%; left: 50%;
+      width: 50px; height: 50px;
+      background: rgba(76, 175, 80, 0.6);
+      box-shadow: 0 0 15px rgba(76, 175, 80, 0.8);
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none; 
+    }
+
+    /* CREDITS CSS */
+    #credits {
+      position: absolute; z-index: 5; color: white; font-size: 1.5rem; line-height: 2;
+      opacity: 0; transition: opacity 2s ease-in-out; pointer-events: none;
+      text-shadow: 0 0 15px rgba(255,255,255,0.8); letter-spacing: 2px; padding: 40px;
+    }
+
+    #finText {
+      position: absolute; bottom: 10%; right: 5%; color: white; font-size: 1.8rem;
+      letter-spacing: 4px; z-index: 5; pointer-events: none; font-style: italic;
+      text-shadow: 0 0 15px rgba(255,255,255,0.8); animation: pulseFin 4s infinite ease-in-out;
+    }
+
+    @keyframes pulseFin {
+      0% { opacity: 0.2; }
+      50% { opacity: 1; text-shadow: 0 0 25px rgba(255,255,255,1); }
+      100% { opacity: 0.2; }
+    }
+
+    #errorLog { color: #ff5555; margin-top: 20px; font-family: monospace; max-width: 90%; word-wrap: break-word;}
+    
+    @media (max-width: 768px) {
+      #instructions h1 { font-size: 2rem; }
+      #instructions p { font-size: 0.9rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="instructions">
+    <h1 style="margin:0; letter-spacing: 3px; font-weight: 300; font-size: 2.5rem;">Team Linell's Museum</h1>
+    <p style="color:#bbb; margin-top: 20px; font-size: 1.1rem; line-height: 1.6;">
+      <strong>Desktop:</strong> W, A, S, D = Move | Arrows or Mouse = Look<br>
+      <strong>Mobile:</strong> Use Left Joystick to Walk | Drag Right Screen to Look
+    </p>
+    <button id="startBtn">ENTER MUSEUM</button>
+    <p id="errorLog"></p>
+  </div>
+
+  <div id="credits"></div>
+  
+  <!-- Virtual Joystick Container -->
+  <div id="joystickZone">
+    <div id="joystickKnob"></div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+  
+  <script>
+    window.onerror = function(message) {
+        document.getElementById('errorLog').innerText += "\n[Error] " + message;
+    };
+
+    let camera, scene, renderer, composer;
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let lookUp = false, lookDown = false, lookLeft = false, lookRight = false;
+    
+    // Mouse Variables
+    let isDragging = false, lon = -90, lat = 0;
+    
+    // Joystick Variables
+    let joyDelta = { x: 0, y: 0 };
+    
+    let prevTime = performance.now();
+    const floatingMedia = [];
+    let snowParticles, fireflies, skyDome, mainTextMat;
+
+    // --- AUDIO ---
+    const playlist = [
+      "https://khaoplokzfvxueaqgixx.supabase.co/storage/v1/object/public/data/teamlinell/songs/purple.mp3",
+      "https://khaoplokzfvxueaqgixx.supabase.co/storage/v1/object/public/data/teamlinell/songs/loveisdead.mp3" 
+    ];
+    let currentSongIndex = Math.floor(Math.random() * playlist.length);
+    
+    const bgMusic = new Audio();
+    bgMusic.crossOrigin = "anonymous";
+    bgMusic.volume = 0.5;
+    bgMusic.addEventListener('ended', () => {
+      currentSongIndex = (currentSongIndex + 1) % playlist.length;
+      bgMusic.src = playlist[currentSongIndex];
+      bgMusic.play();
+    });
+
+    // --- CREDITS LOGIC ---
+    const castList = [
+      "<span style='color:white; font-size:0.6em; text-transform:uppercase; letter-spacing:3px;'>Team Lead</span><br/><b>Linellf</b>",
+      "Alarbert", "Azusano", "Emcell",
+      "Erl", "Uge", "Francis", "Mary Joy",
+      "Jamie", "Mau", "Jean", "Jethro",
+      "Jewel", "Bam", "Cedrick", "Rex",
+      "Joseph", "Justine", "Karla", "Kobe",
+      "Lowi", "Sean", "Yuan", "Bree",
+      "Drew"
+    ];
+
+    function startCredits() {
+        const creditsDiv = document.getElementById('credits');
+        let currentChunk = 0;
+
+        function showNextCredit() {
+            if (currentChunk * 4 >= castList.length) {
+                creditsDiv.style.opacity = 0;
+                setTimeout(() => {
+                    creditsDiv.remove();
+                    const finDiv = document.createElement('div');
+                    finDiv.id = 'finText';
+                    finDiv.innerHTML = "fin...";
+                    document.body.appendChild(finDiv);
+                }, 2000);
+                return;
+            }
+
+            const chunk = castList.slice(currentChunk * 4, currentChunk * 4 + 4);
+            creditsDiv.innerHTML = chunk.join('<br><br>'); 
+
+            if (Math.random() > 0.5) {
+                creditsDiv.style.top = '10%'; creditsDiv.style.left = '5%';
+                creditsDiv.style.bottom = 'auto'; creditsDiv.style.right = 'auto';
+                creditsDiv.style.textAlign = 'left';
+            } else {
+                creditsDiv.style.bottom = '10%'; creditsDiv.style.right = '5%';
+                creditsDiv.style.top = 'auto'; creditsDiv.style.left = 'auto';
+                creditsDiv.style.textAlign = 'right';
+            }
+
+            creditsDiv.style.opacity = 1;
+            setTimeout(() => {
+                creditsDiv.style.opacity = 0;
+                setTimeout(() => {
+                    currentChunk++;
+                    showNextCredit();
+                }, 2000); 
+            }, 8000); 
+        }
+        showNextCredit();
+    }
+
+    // --- START EXPERIENCE TRIGGER ---
+    let hasStarted = false;
+    document.getElementById('startBtn').addEventListener('click', function () {
+        if (hasStarted) return;
+        hasStarted = true;
+        document.getElementById('instructions').style.display = 'none';
+        
+        bgMusic.src = playlist[currentSongIndex];
+        bgMusic.play().catch(e => console.log("Audio prevented"));
+
+        // Check if device supports touch to show virtual joystick
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+            document.getElementById('joystickZone').style.display = 'block';
+        }
+
+        setTimeout(startCredits, 3000);
+    });
+
+    init();
+
+    function init() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+      camera.position.y = 2; 
+
+      const textureLoader = new THREE.TextureLoader();
+      textureLoader.setCrossOrigin('anonymous');
+      textureLoader.load(
+        'https://khaoplokzfvxueaqgixx.supabase.co/storage/v1/object/public/data/teamlinell/sky/Panorama_Sky_17-512x512.png', 
+        (texture) => {
+          const sphereGeo = new THREE.SphereGeometry(500, 60, 40); 
+          const sphereMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.BackSide });
+          skyDome = new THREE.Mesh(sphereGeo, sphereMat);
+          scene.add(skyDome);
+        }
+      );
+
+      const fontLoader = new THREE.FontLoader();
+      fontLoader.load('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+        const textGeo = new THREE.TextGeometry('Team Linell', {
+          font: font, size: 30, height: 3, curveSegments: 12,
+          bevelEnabled: true, bevelThickness: 1, bevelSize: 0.5, bevelSegments: 5
+        });
+        
+        mainTextMat = new THREE.MeshStandardMaterial({ 
+            color: 0xffffff, emissive: 0x4caf50, emissiveIntensity: 0.4
+        });
+        const textMesh = new THREE.Mesh(textGeo, mainTextMat);
+        
+        textGeo.computeBoundingBox();
+        const centerOffset = -0.5 * (textGeo.boundingBox.max.x - textGeo.boundingBox.min.x);
+        textGeo.translate(centerOffset, 0, 0); 
+        
+        textMesh.position.set(0, 60, 150); 
+        textMesh.rotation.y = Math.PI; 
+        scene.add(textMesh);
+      });
+
+      const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
+      light.position.set(0.5, 1, 0.75);
+      scene.add(light);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 32; canvas.height = 32;
+      const context = canvas.getContext('2d');
+      const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, 'rgba(255,255,255,1)'); 
+      gradient.addColorStop(1, 'rgba(255,255,255,0)'); 
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 32, 32);
+      const particleTexture = new THREE.CanvasTexture(canvas);
+
+      const snowCount = 600; 
+      const snowGeo = new THREE.BufferGeometry();
+      const snowPositions = new Float32Array(snowCount * 3);
+      for (let i = 0; i < snowCount * 3; i++) {
+        snowPositions[i] = (Math.random() - 0.5) * 200; 
+      }
+      snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPositions, 3));
+      
+      const snowMat = new THREE.PointsMaterial({
+        color: 0xffffff, size: 0.6, map: particleTexture, 
+        transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false 
+      });
+      snowParticles = new THREE.Points(snowGeo, snowMat);
+      scene.add(snowParticles);
+
+      const fireflyCount = 300; 
+      const fireflyGeo = new THREE.BufferGeometry();
+      const fireflyPositions = new Float32Array(fireflyCount * 3);
+      for (let i = 0; i < fireflyCount * 3; i++) {
+        fireflyPositions[i] = (Math.random() - 0.5) * 200; 
+      }
+      fireflyGeo.setAttribute('position', new THREE.BufferAttribute(fireflyPositions, 3));
+      
+      const fireflyMat = new THREE.PointsMaterial({
+        color: 0xffd700,
+        size: 0.8, map: particleTexture, 
+        transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false 
+      });
+      fireflies = new THREE.Points(fireflyGeo, fireflyMat);
+      scene.add(fireflies);
+
+      renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true }); 
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(width, height);
+      document.body.appendChild(renderer.domElement);
+
+      const renderScene = new THREE.RenderPass(scene, camera);
+      const bloomPass = new THREE.UnrealBloomPass(new THREE.Vector2(width, height), 0.25, 0.5, 0.85); 
+      
+      composer = new THREE.EffectComposer(renderer);
+      composer.addPass(renderScene);
+      composer.addPass(bloomPass);
+
+      setupControls();
+      setupTouchControls(); // Initialize mobile joysticks
+      
+      window.addEventListener('resize', () => {
+        const newWidth = window.innerWidth;
+        const newHeight = window.innerHeight;
+        camera.aspect = newWidth / newHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(newWidth, newHeight);
+        composer.setSize(newWidth, newHeight);
+      });
+
+      fetchMediaDirectly();
+      animate();
+    }
+
+    async function fetchMediaDirectly() {
+      const supabaseUrl = 'https://khaoplokzfvxueaqgixx.supabase.co';
+      const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtoYW9wbG9remZ2eHVlYXFnaXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMyNTQyNzIsImV4cCI6MjA2ODgzMDI3Mn0.9x0JMQ-1j-Td11B9P_oZawZ4sYqiEpuYXbwO4hdJ2e4'; 
+      
+      try {
+        const response = await fetch(supabaseUrl + '/storage/v1/object/list/data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + supabaseKey, 'apikey': supabaseKey },
+            body: JSON.stringify({ prefix: 'teamlinell', limit: 1000, offset: 0 })
+        });
+
+        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        const files = await response.json();
+        
+        const loader = new THREE.TextureLoader();
+        loader.setCrossOrigin('anonymous'); 
+
+        files.forEach((file) => {
+          const fileName = (file.name || "").toLowerCase();
+          const isImage = fileName.endsWith('.jpeg') || fileName.endsWith('.jpg') || fileName.endsWith('.png');
+          const isVideo = fileName.endsWith('.mp4') || fileName.endsWith('.webm') || fileName.endsWith('.mov');
+
+          if (!isImage && !isVideo) return; 
+          const publicUrl = supabaseUrl + '/storage/v1/object/public/data/teamlinell/' + file.name;
+
+          if (isImage) {
+              loader.load(publicUrl, (texture) => {
+                createPlane(texture, texture.image.width / texture.image.height);
+              });
+          } else if (isVideo) {
+              const video = document.createElement('video');
+              video.src = publicUrl;
+              video.crossOrigin = 'anonymous';
+              video.loop = true;
+              video.muted = true; 
+              video.playsInline = true;
+              video.play();
+              const texture = new THREE.VideoTexture(video);
+              
+              video.addEventListener('loadedmetadata', () => {
+                  createPlane(texture, video.videoWidth / video.videoHeight);
+              });
+          }
+        });
+      } catch (e) { document.getElementById('errorLog').innerText += "\n[Fetch Error] " + e.message; }
+    }
+
+    function createPlane(texture, aspect) {
+        const geometry = new THREE.PlaneGeometry(4 * aspect, 4);
+        const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, transparent: true });
+        const plane = new THREE.Mesh(geometry, material);
+        
+        plane.position.set(
+            (Math.random() - 0.5) * 120, 
+            (Math.random() - 0.5) * 40 + 10, 
+            (Math.random() - 0.5) * 120
+        );
+        
+        plane.rotation.y = Math.random() * Math.PI;
+        plane.userData = {
+            floatSpeed: Math.random() * 0.005 + 0.002,
+            floatOffset: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.002
+        };
+        scene.add(plane);
+        floatingMedia.push(plane);
+    }
+
+    function setupControls() {
+      // Desktop Keyboard
+      document.addEventListener('keydown', (e) => {
+        if(e.code==='KeyW') moveForward=true; if(e.code==='KeyS') moveBackward=true;
+        if(e.code==='KeyA') moveLeft=true;    if(e.code==='KeyD') moveRight=true;
+        if(e.code==='ArrowUp') lookUp=true;     if(e.code==='ArrowDown') lookDown=true;
+        if(e.code==='ArrowLeft') lookLeft=true;   if(e.code==='ArrowRight') lookRight=true;
+      });
+      document.addEventListener('keyup', (e) => {
+        if(e.code==='KeyW') moveForward=false; if(e.code==='KeyS') moveBackward=false;
+        if(e.code==='KeyA') moveLeft=false;    if(e.code==='KeyD') moveRight=false;
+        if(e.code==='ArrowUp') lookUp=false;     if(e.code==='ArrowDown') lookDown=false;
+        if(e.code==='ArrowLeft') lookLeft=false;   if(e.code==='ArrowRight') lookRight=false;
+      });
+      
+      // Desktop Mouse Look
+      document.addEventListener('mousedown', () => isDragging = true);
+      document.addEventListener('mouseup', () => isDragging = false);
+      document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+          lon -= e.movementX * 0.15; lat -= e.movementY * 0.15;
+          lat = Math.max(-85, Math.min(85, lat)); 
+        }
+      });
+    }
+
+    // --- MULTI-TOUCH MOBILE CONTROLS ---
+    function setupTouchControls() {
+      const joyZone = document.getElementById('joystickZone');
+      const joyKnob = document.getElementById('joystickKnob');
+      let joyId = null;
+      let lookId = null;
+      let prevLookX = 0;
+      let prevLookY = 0;
+      let joyCenter = { x: 0, y: 0 };
+      const maxJoyRadius = 60; // 120px / 2
+
+      document.addEventListener('touchstart', (e) => {
+        // Handle multiple simultaneous touches
+        for (let i = 0; i < e.changedTouches.length; i++) {
+            const touch = e.changedTouches[i];
+            const isJoyTouch = joyZone.contains(e.target) || e.target === joyZone;
+
+            if (isJoyTouch && joyId === null && hasStarted) {
+                joyId = touch.identifier;
+                const rect = joyZone.getBoundingClientRect();
+                joyCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                updateJoystick(touch.clientX, touch.clientY);
+            } else if (!isJoyTouch && lookId === null && hasStarted) {
+                lookId = touch.identifier;
+                prevLookX = touch.clientX;
+                prevLookY = touch.clientY;
+            }
+        }
+      }, {passive: false});
+
+      document.addEventListener('touchmove', (e) => {
+        for (let i = 0; i < e.changedTouches.length; i++) {
+            const touch = e.changedTouches[i];
+            
+            // If dragging joystick
+            if (touch.identifier === joyId) {
+                e.preventDefault();
+                updateJoystick(touch.clientX, touch.clientY);
+            } 
+            // If dragging screen to look
+            else if (touch.identifier === lookId) {
+                e.preventDefault();
+                lon -= (touch.clientX - prevLookX) * 0.25;
+                lat -= (touch.clientY - prevLookY) * 0.25;
+                lat = Math.max(-85, Math.min(85, lat));
+                prevLookX = touch.clientX;
+                prevLookY = touch.clientY;
+            }
+        }
+      }, {passive: false});
+
+      document.addEventListener('touchend', handleTouchEnd);
+      document.addEventListener('touchcancel', handleTouchEnd);
+
+      function handleTouchEnd(e) {
+          for (let i = 0; i < e.changedTouches.length; i++) {
+              const touch = e.changedTouches[i];
+              if (touch.identifier === joyId) {
+                  joyId = null;
+                  joyDelta = { x: 0, y: 0 };
+                  joyKnob.style.transform = `translate(-50%, -50%)`; // Snap back to center
+              } else if (touch.identifier === lookId) {
+                  lookId = null;
+              }
+          }
+      }
+
+      function updateJoystick(x, y) {
+          let dx = x - joyCenter.x;
+          let dy = y - joyCenter.y;
+          const distance = Math.sqrt(dx*dx + dy*dy);
+          
+          if (distance > maxJoyRadius) {
+              dx = (dx / distance) * maxJoyRadius;
+              dy = (dy / distance) * maxJoyRadius;
+          }
+          
+          joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+          
+          // Set normalized movement delta (-1 to 1) for the animation loop
+          joyDelta.x = dx / maxJoyRadius;
+          joyDelta.y = dy / maxJoyRadius;
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const time = performance.now();
+      const delta = (time - prevTime) / 1000;
+
+      if (skyDome) {
+          skyDome.rotation.y += 0.0005;
+      }
+      if (mainTextMat) {
+          mainTextMat.emissiveIntensity = 0.3 + Math.sin(time * 0.002) * 0.2;
+      }
+
+      const lookSpeed = 90.0 * delta; 
+      if (lookUp) lat += lookSpeed;
+      if (lookDown) lat -= lookSpeed;
+      if (lookLeft) lon -= lookSpeed;
+      if (lookRight) lon += lookSpeed;
+      lat = Math.max(-85, Math.min(85, lat)); 
+
+      const phi = THREE.MathUtils.degToRad(90 - lat);
+      const theta = THREE.MathUtils.degToRad(lon);
+      
+      const target = new THREE.Vector3();
+      target.x = camera.position.x + 100 * Math.sin(phi) * Math.cos(theta);
+      target.y = camera.position.y + 100 * Math.cos(phi);
+      target.z = camera.position.z + 100 * Math.sin(phi) * Math.sin(theta);
+      camera.lookAt(target);
+
+      const speed = 15.0; 
+      // Desktop Keyboard Movement
+      if (moveForward) camera.translateZ(-speed * delta);
+      if (moveBackward) camera.translateZ(speed * delta);
+      if (moveLeft) camera.translateX(-speed * delta);
+      if (moveRight) camera.translateX(speed * delta);
+
+      // Mobile Joystick Movement
+      if (joyDelta.y !== 0) camera.translateZ(joyDelta.y * speed * delta);
+      if (joyDelta.x !== 0) camera.translateX(joyDelta.x * speed * delta);
+
+      floatingMedia.forEach((obj) => {
+          obj.position.y += Math.sin(time * obj.userData.floatSpeed + obj.userData.floatOffset) * 0.005;
+          obj.rotation.y += obj.userData.rotSpeed;
+      });
+
+      const sPositions = snowParticles.geometry.attributes.position.array;
+      for (let i = 0; i < sPositions.length; i += 3) {
+          sPositions[i + 1] -= 2.0 * delta; 
+          sPositions[i] += Math.sin(time * 0.001 + sPositions[i + 2]) * 0.01; 
+          if (sPositions[i + 1] < -80) sPositions[i + 1] = 80; 
+      }
+      snowParticles.geometry.attributes.position.needsUpdate = true;
+
+      const fPositions = fireflies.geometry.attributes.position.array;
+      for (let i = 0; i < fPositions.length; i += 3) {
+          fPositions[i + 1] += 1.5 * delta; 
+          fPositions[i] += Math.sin(time * 0.002 + fPositions[i + 2]) * 0.02; 
+          if (fPositions[i + 1] > 80) fPositions[i + 1] = -80; 
+      }
+      fireflies.geometry.attributes.position.needsUpdate = true;
+
+      prevTime = time;
+      composer.render();
+    }
+  </script>
+</body>
+</html>
